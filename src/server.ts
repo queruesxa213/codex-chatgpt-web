@@ -35,10 +35,12 @@ import {
   requireChatGptWebModelRoute,
   type ChatGptWebModelRoute,
 } from "./chatgpt-web-models";
-import { forwardNativeCodexRequest, type NativeFetch, type NativeImageEndpoint } from "./native-passthrough";
+import { forwardNativeCodexRequest, type NativeCodexEndpoint, type NativeFetch, type NativeImageEndpoint } from "./native-passthrough";
 import { fetchNativeCodex } from "./native-network";
+import { forwardCustomProviderRequest, readCustomProviderCatalog, validateCustomProviderConfig } from "./custom-provider";
 import {
   buildCompactV1Output,
+  BRIDGE_COMPACTION_PREFIX,
   COMPACT_PROMPT,
   decodeCompactionSummary,
   extractCompactUserMessages,
@@ -51,6 +53,24 @@ import type { ProviderAdapter } from "./adapters/base";
 import { VERSION } from "./version";
 
 type HttpTrackedEndpoint = "models" | "responses" | "compact" | "search" | "unspecified" | NativeImageEndpoint;
+
+function hasForeignCompaction(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const input = (value as { input?: unknown }).input;
+  return Array.isArray(input) && input.some(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const compact = item as { type?: unknown; encrypted_content?: unknown };
+    return compact.type === "compaction" && typeof compact.encrypted_content === "string"
+      && !compact.encrypted_content.startsWith(BRIDGE_COMPACTION_PREFIX);
+  });
+}
+
+function foreignCompactionError(): Response {
+  return formatErrorResponse(409, "context_handoff_required",
+    "The selected Web model cannot decrypt the custom provider's compacted history. "
+    + "Return to the original API model, save a readable handoff, and start a new Web task with it. "
+    + "No browser turn or fallback was started.");
+}
 
 export interface NativeCodexTurnIdentity {
   threadId: string;
@@ -360,6 +380,20 @@ export interface ResponseRequestOptions {
   onAdapterEvent?: (event: AdapterEvent) => void;
   /** Bind the physical HTTP stream to the exact native Codex turn that owns it. */
   onTurnIdentity?: (identity: NativeCodexTurnIdentity) => void;
+  /** Testable upstream transport shared by all ordinary-model endpoints. */
+  fetchUpstream?: NativeFetch;
+}
+
+export function forwardConfiguredRequest(
+  request: Request,
+  config: AppConfig,
+  endpoint: NativeCodexEndpoint,
+  fetchUpstream?: NativeFetch,
+  decodedBody?: unknown,
+): Promise<Response> {
+  return config.customProvider
+    ? forwardCustomProviderRequest(request, config.customProvider, endpoint, fetchUpstream, decodedBody)
+    : forwardNativeCodexRequest(request, endpoint, fetchUpstream, decodedBody);
 }
 
 export function routeChatGptWebRequest(parsed: CodexParsedRequest, config: AppConfig): ChatGptWebModelRoute {
@@ -521,6 +555,21 @@ export async function modelsRequest(
 ): Promise<Response> {
   const cancelled = () => new Response(null, { status: 499 });
   if (clientSignal.aborted) return cancelled();
+  if (config.customProvider) {
+    try {
+      const catalog = readCustomProviderCatalog(config.customProvider);
+      if (clientSignal.aborted) return cancelled();
+      const body = JSON.stringify(catalog);
+      return new Response(body, { headers: {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        etag: `W/\"${createHash("sha256").update(body).digest("base64url")}\"`,
+      } });
+    } catch (error) {
+      onFailure?.(modelCatalogFailure("catalog", error));
+      return formatErrorResponse(502, "invalid_response_error", error instanceof Error ? error.message : String(error));
+    }
+  }
   let upstream: Response;
   let sent = false;
   const forward = (request: Request, markSent: () => void) => forwardNativeCodexRequest(request, "models", input => {
@@ -571,25 +620,31 @@ export async function modelsRequest(
 export async function nativeSearchRequest(
   req: Request,
   fetchUpstream?: NativeFetch,
+  config?: AppConfig,
 ): Promise<Response> {
   try {
-    return await forwardNativeCodexRequest(req, "alpha/search", fetchUpstream);
+    return config
+      ? await forwardConfiguredRequest(req, config, "alpha/search", fetchUpstream)
+      : await forwardNativeCodexRequest(req, "alpha/search", fetchUpstream);
   } catch (error) {
     return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : String(error));
   }
 }
 
-async function nativeImagesRequest(
+export async function nativeImagesRequest(
   req: Request,
   endpoint: NativeImageEndpoint,
   fetchUpstream?: NativeFetch,
+  config?: AppConfig,
 ): Promise<Response> {
   const authorization = req.headers.get("authorization") ?? "";
-  if (!authorization.startsWith("Bearer ") || authorization.length <= "Bearer ".length) {
+  if (!config?.customProvider && (!authorization.startsWith("Bearer ") || authorization.length <= "Bearer ".length)) {
     return formatErrorResponse(401, "authentication_error", "Native image requests require incoming Codex Bearer authorization");
   }
   try {
-    return await forwardNativeCodexRequest(req, endpoint, fetchUpstream);
+    return config
+      ? await forwardConfiguredRequest(req, config, endpoint, fetchUpstream)
+      : await forwardNativeCodexRequest(req, endpoint, fetchUpstream);
   } catch (error) {
     return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : String(error));
   }
@@ -641,7 +696,7 @@ export async function responseRequest(
   }
   if (typeof requestedModel === "string" && !isChatGptWebModelSlug(requestedModel)) {
     try {
-      return await forwardNativeCodexRequest(nativeRequest, "responses", undefined, raw);
+      return await forwardConfiguredRequest(nativeRequest, config, "responses", options.fetchUpstream, raw);
     } catch (error) {
       return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : String(error));
     }
@@ -650,6 +705,7 @@ export async function responseRequest(
     ? (raw as { previous_response_id?: unknown }).previous_response_id
     : undefined;
   const expanded = expandPreviousResponseInput(raw);
+  if (config.customProvider && hasForeignCompaction(expanded)) return foreignCompactionError();
   let parsed: CodexParsedRequest;
   let route: ChatGptWebModelRoute;
   try {
@@ -829,7 +885,7 @@ export async function compactRequest(
   req: Request,
   config: AppConfig,
   adapterFactory: ChatGptWebAdapterFactory = createChatGptWebAdapter,
-  options: Pick<ResponseRequestOptions, "onTurnIdentity"> = {},
+  options: Pick<ResponseRequestOptions, "onTurnIdentity" | "fetchUpstream"> = {},
 ): Promise<Response> {
   const nativeRequest = req.clone();
   let raw: Record<string, unknown>;
@@ -873,11 +929,12 @@ export async function compactRequest(
   }
   if (!isChatGptWebModelSlug(raw.model)) {
     try {
-      return await forwardNativeCodexRequest(nativeRequest, "responses/compact", undefined, raw);
+      return await forwardConfiguredRequest(nativeRequest, config, "responses/compact", options.fetchUpstream, raw);
     } catch (error) {
       return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : String(error));
     }
   }
+  if (config.customProvider && hasForeignCompaction(raw)) return foreignCompactionError();
   let route: ChatGptWebModelRoute;
   try {
     route = requireChatGptWebModelRoute(raw.model, config);
@@ -953,6 +1010,7 @@ export function startServer(
   if (config.purpose === "dev-harness") {
     throw new Error("DEV harness configuration cannot start a Responses listener");
   }
+  if (config.customProvider) validateCustomProviderConfig(config.customProvider);
   const startedAt = Date.now();
   const turnBroker = config.mode === "full" ? TurnBroker.forSocket(config.brokerSocketPath) : undefined;
   if (config.mode === "full") {
@@ -1223,7 +1281,7 @@ export function startServer(
             new Request(req, { signal }),
             config,
             dependencies.adapterFactory,
-            { onTurnIdentity: bindIdentity },
+            { onTurnIdentity: bindIdentity, fetchUpstream: dependencies.fetchUpstream },
           ),
           req.signal,
           process.platform,
@@ -1237,7 +1295,7 @@ export function startServer(
             new Request(req, { signal }),
             config,
             dependencies.adapterFactory,
-            { onTurnIdentity: bindIdentity },
+            { onTurnIdentity: bindIdentity, fetchUpstream: dependencies.fetchUpstream },
           ),
           req.signal,
           process.platform,
@@ -1247,7 +1305,7 @@ export function startServer(
       if (req.method === "POST" && url.pathname === "/v1/alpha/search") {
         if (draining) return formatErrorResponse(503, "server_error", "codex-chatgpt-web is draining for a requested service operation");
         return httpTurns.track(
-          signal => nativeSearchRequest(new Request(req, { signal }), dependencies.fetchUpstream),
+          signal => nativeSearchRequest(new Request(req, { signal }), dependencies.fetchUpstream, config),
           req.signal,
           process.platform,
           "search",
@@ -1260,7 +1318,7 @@ export function startServer(
           ? "images/generations"
           : "images/edits";
         return httpTurns.track(
-          signal => nativeImagesRequest(new Request(req, { signal }), endpoint, dependencies.fetchUpstream),
+          signal => nativeImagesRequest(new Request(req, { signal }), endpoint, dependencies.fetchUpstream, config),
           req.signal,
           process.platform,
           endpoint,

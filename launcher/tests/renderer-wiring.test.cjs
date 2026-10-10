@@ -471,6 +471,43 @@ test("completed model setup remains a repeatable capability probe", () => {
   );
 });
 
+test("mixed-provider Setup control persists explicit opt-in, locks installed mode and accepts local catalog readiness", async () => {
+  const ts = require("typescript");
+  const vm = require("node:vm");
+  const setup = appSource.slice(appSource.indexOf("function SetupSurface("), appSource.indexOf("function McpSurface("));
+  const state = { browserInteractionMode: "automatic", coreSetupComplete: false, mixedProvider: false };
+  let preference;
+  const sandbox = {
+    element: (type, props, ...children) => ({ type, props: props ?? {}, children }),
+    React: { Fragment: "Fragment" }, useState: value => [value, () => {}], messageOf: String,
+    api: { setPreference: async (key, value) => { preference = [key, value]; return { ...state, [key]: value }; } },
+  };
+  for (const name of new Set([...setup.matchAll(/<([A-Z][A-Za-z]+)/g)].map(match => match[1]))) sandbox[name] = name;
+  vm.runInNewContext(ts.transpileModule(setup, { fileName: "setup.tsx", compilerOptions: {
+    target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React, jsxFactory: "element",
+  } }).outputText + "\nrender = SetupSurface;", sandbox);
+  const visit = tree => Array.isArray(tree) ? tree.flatMap(visit) : tree && typeof tree === "object"
+    ? [tree, ...visit(tree.children ?? [])] : [];
+  const props = {
+    snapshot: { state, smokePassed: true }, copy: { mixedProvider: "Keep existing API provider" },
+    devProfile: false, browser: { authenticated: true }, operation: null,
+    updateState: next => Object.assign(state, next), setError: error => { if (error) throw new Error(error); },
+  };
+  let tree = sandbox.render(props);
+  const control = visit(tree).find(node => node.type === "Switch");
+  assert.equal(control.props.checked, false);
+  assert.equal(control.props.disabled, false);
+  control.props.onChange(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(preference, ["mixedProvider", true]);
+  assert.equal(state.mixedProvider, true);
+  Object.assign(state, { coreSetupComplete: true, codexLocalCatalogReady: true, codexCatalogVerified: false });
+  tree = sandbox.render(props);
+  assert.equal(visit(tree).find(node => node.type === "Switch").props.disabled, true);
+  assert.equal(visit(tree).find(node => node.type === "button" && node.props.className === "next-surface-row").props.disabled, false);
+  assert.equal(visit(sandbox.render({ ...props, devProfile: true })).some(node => node.type === "Switch"), false);
+});
+
 test("catalog verification reports a failed request instead of requesting another restart, then recovers", async () => {
   const vm = require("node:vm");
   const start = electronMain.indexOf("function startCatalogVerificationMonitor(");

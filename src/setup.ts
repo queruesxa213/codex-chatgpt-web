@@ -41,8 +41,11 @@ import {
 import { connectTunnel, createTunnelConfig, installRuntimeKey, installRuntimeKeyBytes, installTunnelClient, managedRuntimeKeyPath, stopTunnel, waitForTunnelReady } from "./tunnel";
 import { getTunnelServiceStatus, installTunnelService, restartTunnelService, stopTunnelService, tunnelServiceDefinitionMatches, uninstallTunnelService } from "./tunnel-service";
 import { VERSION } from "./version";
+import { captureCustomProviderConfig } from "./custom-codex-integration";
 
 export interface SetupOptions {
+  mixedProvider?: boolean;
+  codexExecutablePath?: string;
   connectorNameSuffix?: string;
   mode: RuntimeMode;
   browserInteractionMode?: BrowserInteractionMode;
@@ -159,6 +162,7 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     tunnel: before.tunnel,
     automaticTunnel: before.automaticTunnel,
     manualTunnel: before.manualTunnel,
+    customProvider: before.customProvider,
   }) !== JSON.stringify({
     mode: after.mode,
     subagentProtocol: after.subagentProtocol,
@@ -190,6 +194,7 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     tunnel: after.tunnel,
     automaticTunnel: after.automaticTunnel,
     manualTunnel: after.manualTunnel,
+    customProvider: after.customProvider,
   });
 }
 
@@ -272,6 +277,12 @@ function baseConfig(
 ): AppConfig {
   const config = existing ? structuredClone(existing) : defaultConfig(options.mode);
   config.mode = options.mode;
+  if (options.mixedProvider === true) {
+    config.customProvider = captureCustomProviderConfig(options.codexExecutablePath);
+  }
+  if (options.mixedProvider === false && existing?.customProvider) {
+    throw new Error("Remove the mixed Codex integration before switching to the official provider mode");
+  }
   if (options.browserInteractionMode) config.browserInteractionMode = options.browserInteractionMode;
   Object.assign(config, resolveInteractionConnectorIdentities(
     config.browserInteractionMode,
@@ -517,6 +528,7 @@ export function preflightSetup(options: SetupOptions): void {
   }
   preflightCodexIntegration(config, {
     replaceExistingRoute: options.replaceCodexRoute,
+    codexExecutable: options.codexExecutablePath,
   });
 }
 
@@ -524,6 +536,7 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
   const { existing, config, launcherOwned } = prepareSetup(options);
   preflightCodexIntegration(config, {
     replaceExistingRoute: options.replaceCodexRoute,
+    codexExecutable: options.codexExecutablePath,
   });
   const refreshTunnelWorker = tunnelWorkerRuntimeChanged(existing, config);
   if (existing && options.restartService) config.controlToken = randomBytes(32).toString("base64url");
@@ -667,6 +680,7 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
   installCodexIntegration(config, {
     replaceExistingRoute: options.replaceCodexRoute,
     preserveDisconnectedRoute: options.preserveDisconnectedRoute,
+    codexExecutable: options.codexExecutablePath,
   });
 
   return {

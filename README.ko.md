@@ -1,3 +1,5 @@
+> 이 Fork는 API 키와 기존 사용자 지정 제공자를 유지하는 혼합 라우팅을 추가합니다. [혼합 모드 안내](docs/mixed-provider.zh-CN.md)를 확인하세요. 구현은 `codex/mixed-custom-web` 브랜치에 있으며 아래의 원본 v6.1.7 배포판에는 포함되지 않습니다.
+
 <p align="center">
   <img src="assets/readme/hero.svg" width="960" alt="웹 모델로 전환해도, Codex는 그대로. 내 ChatGPT 플랜. 내 작업 흐름. 모델의 가능성을 최대한.">
 </p>

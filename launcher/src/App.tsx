@@ -352,7 +352,8 @@ function LauncherShell({
 }) {
   const interactionSetupComplete = snapshot.state.coreSetupComplete === true
     && (snapshot.state.browserInteractionMode === "manual"
-      || snapshot.state.codexCatalogVerified === true);
+      || snapshot.state.codexCatalogVerified === true
+      || snapshot.state.codexLocalCatalogReady === true);
   const firstRunZeroRiskSetup = snapshot.state.browserInteractionMode === "manual"
     && snapshot.state.coreSetupComplete !== true;
   const [surface, setSurface] = useState<Surface>(
@@ -381,7 +382,7 @@ function LauncherShell({
     && browser?.authenticated !== true;
   const needsSetup = !needsBrowser && !interactionSetupComplete;
   const mcpOptional = snapshot.state.browserInteractionMode === "automatic"
-    && snapshot.state.codexCatalogVerified === true
+    && (snapshot.state.codexCatalogVerified === true || snapshot.state.codexLocalCatalogReady === true)
     && snapshot.state.mcpSetupComplete !== true;
   const updateVisible = ["available", "downloading", "installing"].includes(snapshot.update.status);
   const updateBusy = snapshot.update.status === "downloading" || snapshot.update.status === "installing";
@@ -1221,6 +1222,9 @@ function SetupSurface({
   const setZeroRiskPro = (enabled: boolean) => run(async () => {
     updateState(await api!.setZeroRiskPro(enabled));
   });
+  const setMixedProvider = (enabled: boolean) => run(async () => {
+    updateState(await api!.setPreference("mixedProvider", enabled));
+  });
 
   return (
     <ContentSurface
@@ -1231,6 +1235,18 @@ function SetupSurface({
       title={devProfile ? copy.devSetupTitle : copy.setupTitle}
     >
       <SectionHeading label={devProfile ? copy.devCoreSetup : copy.coreSetup} />
+      {!devProfile ? (
+        <SettingRow
+          body={snapshot.state.coreSetupComplete ? copy.mixedProviderInstalled : copy.mixedProviderBody}
+          label={copy.mixedProvider}
+        >
+          <Switch
+            checked={snapshot.state.mixedProvider}
+            disabled={busy || snapshot.state.coreSetupComplete === true}
+            onChange={(checked) => void setMixedProvider(checked)}
+          />
+        </SettingRow>
+      ) : null}
       <div className="setup-list">
         {!manualInteraction ? <>
           <SetupRow
@@ -1258,8 +1274,9 @@ function SetupSurface({
           action={snapshot.state.coreSetupComplete
             ? devProfile ? copy.devReinstall : copy.reinstall
             : devProfile ? copy.devInstall : copy.install}
-          complete={snapshot.state.codexCatalogVerified === true}
-          description={devProfile ? copy.devStepInstallBody : copy.stepInstallBody}
+          complete={snapshot.state.codexCatalogVerified === true || snapshot.state.codexLocalCatalogReady === true}
+          description={devProfile ? copy.devStepInstallBody
+            : snapshot.state.mixedProvider ? copy.mixedProviderBody : copy.stepInstallBody}
           disabled={busy || (!snapshot.smokePassed && snapshot.state.coreSetupComplete !== true)}
           index={manualInteraction ? 1 : 3}
           onAction={install}
@@ -1282,10 +1299,14 @@ function SetupSurface({
         </NoticeRow>
       ) : null}
 
+      {!devProfile && snapshot.state.mixedProvider && snapshot.state.codexLocalCatalogReady ? (
+        <NoticeRow icon="info" tone="success">{copy.mixedCatalogReady}</NoticeRow>
+      ) : null}
+
       <SectionHeading label="MCP" meta={manualInteraction ? copy.required : copy.optional} spaced />
       <button
         className="next-surface-row"
-        disabled={!manualInteraction && !snapshot.state.codexCatalogVerified}
+        disabled={!manualInteraction && !snapshot.state.codexCatalogVerified && !snapshot.state.codexLocalCatalogReady}
         onClick={showMcp}
         type="button"
       >
@@ -1414,7 +1435,7 @@ function McpSurface({
       subtitle={devProfile ? copy.devMcpSubtitle : copy.mcpSubtitle}
       title={devProfile ? copy.devMcpTitle : "MCP"}
     >
-      {!manualInteraction && !configuringInactiveMode && !snapshot.state.codexCatalogVerified ? (
+      {!manualInteraction && !configuringInactiveMode && !snapshot.state.codexCatalogVerified && !snapshot.state.codexLocalCatalogReady ? (
         <NoticeRow icon="setup" tone="warning">{copy.mcpCatalogRequired}</NoticeRow>
       ) : null}
 
@@ -1529,7 +1550,7 @@ function McpSurface({
             ) : null}
             {step === 1 ? (
               <p className="mcp-step-two-hint">
-                {manualInteraction || configuringInactiveMode || snapshot.state.codexCatalogVerified
+                {manualInteraction || configuringInactiveMode || snapshot.state.codexCatalogVerified || snapshot.state.codexLocalCatalogReady
                   ? copy.mcpStepTwoHint
                   : copy.mcpCatalogRequired}
               </p>
@@ -1576,7 +1597,7 @@ function McpSurface({
           <PrimaryButton
             disabled={
               busy
-              || (!manualInteraction && !configuringInactiveMode && !snapshot.state.codexCatalogVerified)
+              || (!manualInteraction && !configuringInactiveMode && !snapshot.state.codexCatalogVerified && !snapshot.state.codexLocalCatalogReady)
               || ((!credentialsConfigured || replacingCredentials) && (!tunnelId || !runtimeKey))
             }
             onClick={() => void install()}

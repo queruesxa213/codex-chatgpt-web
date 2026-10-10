@@ -1,3 +1,5 @@
+> 此 Fork 增加了 **API Key／自定义提供方与网页模型混用**。保留 Codex 登录和提供方名称，普通模型走原 API，网页模型走本地桥。安装方法、恢复方式和验证边界见[混合模式指南](docs/mixed-provider.zh-CN.md)。本功能位于 `codex/mixed-custom-web` 分支；下方上游 v6.1.7 下载包不包含它。
+
 <p align="center">
   <img src="assets/readme/hero.svg" width="960" alt="切换到网页版模型，继续使用 Codex。你的 ChatGPT 订阅。你的工作流。充分发挥模型能力。">
 </p>

@@ -231,6 +231,7 @@ export interface FileSnapshot {
 }
 
 export interface InstallCodexIntegrationOptions {
+  codexExecutable?: string;
   replaceExistingRoute?: boolean;
   preserveDisconnectedRoute?: boolean;
 }

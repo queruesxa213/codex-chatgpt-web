@@ -1,3 +1,5 @@
+> This fork adds opt-in **API-key/custom-provider and ChatGPT Web mixed routing**. Keep the existing Codex login and provider ID; ordinary models use the original API and Web models use the local bridge. See the [mixed-provider guide](docs/mixed-provider.zh-CN.md). The implementation is on `codex/mixed-custom-web`; upstream v6.1.7 downloads below do not include it.
+
 <p align="center">
   <img src="assets/readme/hero.svg" width="960" alt="Switch to web models. Stay in Codex. Your ChatGPT plan. Your workflow. Maximum capabilities.">
 </p>

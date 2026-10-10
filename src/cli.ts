@@ -73,6 +73,8 @@ Setup options:
   --tunnel-id ID               Existing OpenAI tunnel id (full mode)
   --runtime-key-file PATH      File containing a Tunnels Read+Use runtime key
   --replace-codex-route        Reversibly replace existing Responses or Voice route settings
+  --mixed-provider             Keep API-key login and route the selected custom provider alongside Web models
+  --codex-executable PATH      Codex binary used to read its matching bundled model catalog
   --subagent-protocol MODE     compatibility-v1 (default) or native (advanced)
   --restart-service            Explicitly restart this project's daemon after an update
   --login                      Refresh the stored ChatGPT login even if one exists
@@ -278,6 +280,9 @@ async function setupCommand(args: string[]): Promise<void> {
     mode: full ? "full" : "browser-only",
     ...(portRaw ? { port: Number(portRaw) } : {}),
   };
+  if (takeFlag(args, "--mixed-provider")) options.mixedProvider = true;
+  const codexExecutable = takeOption(args, "--codex-executable");
+  if (codexExecutable) options.codexExecutablePath = codexExecutable;
   const automaticBrowserInteraction = takeFlag(args, "--automatic-browser-interaction");
   const manualBrowserInteraction = takeFlag(args, "--zero-risk-browser-interaction");
   if (automaticBrowserInteraction && manualBrowserInteraction) {
