@@ -179,6 +179,7 @@ class RuntimeHost {
     publishOperation,
     supervisor,
     getBrowserInteractionMode = () => "automatic",
+    getMixedProvider = () => false,
   }) {
     this.app = app;
     this.logger = logger;
@@ -206,6 +207,7 @@ class RuntimeHost {
     this.publishOperation = publishOperation;
     this.supervisor = supervisor;
     this.getBrowserInteractionMode = getBrowserInteractionMode;
+    this.getMixedProvider = getMixedProvider;
     this.active = null;
     this.activeChild = null;
     this.lifecycleOperation = null;
@@ -244,7 +246,19 @@ class RuntimeHost {
     return [
       mode === "manual" ? "--zero-risk-browser-interaction" : "--automatic-browser-interaction",
       ...(mode === "automatic" && refreshCapabilities ? ["--refresh-account-capabilities"] : []),
+      ...this.mixedProviderArgs(),
     ];
+  }
+
+  mixedProviderArgs() {
+    if (this.launcherProfile !== "production") return [];
+    const existing = this.runtimeConfigSnapshot();
+    // Installed runtime state takes precedence over a stale launcher preference.
+    // Changing the provider mode requires removing the integration first.
+    const mixed = existing.configured
+      ? Boolean(existing.config?.customProvider)
+      : this.getMixedProvider() === true;
+    return mixed ? ["--mixed-provider"] : [];
   }
 
   assertProductionProfile(operation) {
@@ -497,6 +511,8 @@ class RuntimeHost {
       this.supervisor.configPath,
       path.join(coreHome, "codex", "integration-journal.json"),
       path.join(coreHome, "codex", "integration-journal.recovery.json"),
+      path.join(coreHome, "codex", "custom-integration-journal.json"),
+      path.join(coreHome, "codex", "custom-model-catalog.json"),
       path.join(this.codexHome, "config.toml"),
       path.join(this.codexHome, "models_cache.json"),
       path.join(coreHome, "secrets", "tunnel-runtime.key"),
@@ -507,6 +523,10 @@ class RuntimeHost {
       path.join(coreHome, "tunnel", "profiles", "codex-chatgpt-web-dev.yaml"),
       path.join(coreHome, "tunnel", "profiles", "codex-chatgpt-web-dev-zero-risk.yaml"),
     ]);
+    if (typeof snapshot.config?.customProvider?.catalogPath === "string"
+      && path.isAbsolute(snapshot.config.customProvider.catalogPath)) {
+      paths.add(snapshot.config.customProvider.catalogPath);
+    }
     if (snapshot.owner === "external" && this.platform === "darwin") {
       paths.add(path.join(this.launchAgentsDir, "io.github.codex-chatgpt-web.daemon.plist"));
       paths.add(path.join(this.launchAgentsDir, "io.github.codex-chatgpt-web.tunnel.plist"));

@@ -15,6 +15,7 @@ const DEFAULT_STATE = Object.freeze({
   keepRunningOnClose: true,
   showBrowserDuringTurns: true,
   autoApproveToolCalls: false,
+  mixedProvider: false,
   browserInteractionMode: "automatic",
   experimentalBiggerContext: false,
   experimentalSkillAttachments: false,
@@ -51,6 +52,7 @@ function readState(filePath) {
       "keepRunningOnClose",
       "showBrowserDuringTurns",
       "autoApproveToolCalls",
+      "mixedProvider",
       "experimentalBiggerContext",
       "experimentalSkillAttachments",
       "experimentalFreshConversationPerTurn",
@@ -88,6 +90,7 @@ function readState(filePath) {
     for (const key of [
       "coreSetupComplete",
       "codexCatalogVerified",
+      "codexLocalCatalogReady",
       "mcpSetupComplete",
       "mcpRuntimeInstalled",
       "codexRestartRequired",

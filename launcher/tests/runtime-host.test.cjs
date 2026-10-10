@@ -6,7 +6,7 @@ const path = require("node:path");
 const { CURRENT_CONNECTOR_NAME, DEV_CONNECTOR_NAME } = require("../electron/connector-identity.cjs");
 const { RuntimeHost } = require("../electron/runtime.cjs");
 
-function hostFor(existingConfig, interactionMode = "automatic") {
+function hostFor(existingConfig, interactionMode = "automatic", mixedProvider = false) {
   const host = new RuntimeHost({
     app: {
       getPath: () => path.join(os.tmpdir(), "codex-web-gpt-runtime-host-test"),
@@ -22,6 +22,7 @@ function hostFor(existingConfig, interactionMode = "automatic") {
       startIfConfigured: async () => ({ status: "ready" }),
     },
     getBrowserInteractionMode: () => interactionMode,
+    getMixedProvider: () => mixedProvider,
   });
   let invocation;
   host.runSetup = async (name, args, options = {}) => {
@@ -92,6 +93,79 @@ test("core setup starts in browser-only mode when no installation exists", async
   assert.equal(fixture.invocation().args.includes("--refresh-account-capabilities"), true);
   assert.equal(fixture.invocation().args.includes("--replace-codex-route"), true);
   assert.equal(fixture.invocation().args.includes("--chrome"), false);
+});
+
+test("mixed provider is opt-in for a new setup and existing runtime mode wins on reinstall", async () => {
+  const first = hostFor(null, "automatic", true);
+  await first.host.setupCore();
+  assert.equal(first.invocation().args.includes("--mixed-provider"), true);
+  assert.equal(first.invocation().args.includes("--codex-login"), false);
+
+  const mixedConfig = { mode: "full", customProvider: {
+    providerId: "custom", baseUrl: "https://api.example.test/v1", catalogPath: "/private/mixed-models.json",
+  } };
+  const existing = hostFor(mixedConfig, "automatic", false);
+  await existing.host.setupCore();
+  assert.equal(existing.invocation().args.includes("--mixed-provider"), true);
+  assert.deepEqual(existing.host.runtimeConfigSnapshot().config, mixedConfig, "option plumbing must not rewrite runtime or auth state");
+
+  const official = hostFor({ mode: "browser-only" }, "automatic", true);
+  await official.host.setupCore();
+  assert.equal(official.invocation().args.includes("--mixed-provider"), false);
+});
+
+test("mixed provider selection survives initial MCP setup and managed runtime upgrades", async () => {
+  const firstMcp = hostFor(null, "manual", true);
+  await firstMcp.host.setupMcp({ tunnelId: `tunnel_${"a".repeat(32)}`, runtimeKey: "runtime-key-for-isolated-test-only" });
+  assert.equal(firstMcp.invocation().args.includes("--mixed-provider"), true);
+
+  const existing = hostFor({ mode: "browser-only", browserHost: "launcher", releaseVersion: "1.0.0",
+    customProvider: { providerId: "custom", baseUrl: "https://api.example.test/v1", catalogPath: "/private/mixed-models.json" } });
+  await existing.host.upgradeManagedRuntime();
+  assert.equal(existing.invocation().args.includes("--mixed-provider"), true);
+  assert.equal(existing.invocation().args.includes("--preserve-disconnected-route"), true);
+});
+
+test("failed mixed-provider refresh restores its generated catalog and recovery journal", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-mixed-checkpoint-"));
+  const coreHome = path.join(root, "core");
+  const codexHome = path.join(root, "codex");
+  const configPath = path.join(coreHome, "config.json");
+  const catalogPath = path.join(coreHome, "codex", "custom-model-catalog.json");
+  const journalPath = path.join(coreHome, "codex", "custom-integration-journal.json");
+  fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+  fs.mkdirSync(codexHome, { recursive: true });
+  const config = { mode: "browser-only", browserHost: "launcher", releaseVersion: "1.0.0",
+    customProvider: { providerId: "custom", baseUrl: "https://api.example.test/v1", catalogPath } };
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  fs.writeFileSync(catalogPath, "old catalog\n");
+  fs.writeFileSync(journalPath, "old journal\n");
+  const readConfig = () => JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const host = new RuntimeHost({
+    app: { getPath: () => path.join(root, "launcher") }, logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: "/source", browserDescriptorPath: path.join(coreHome, "runtime", "browser.json"), codexHome,
+    supervisor: { coreHome, configPath, readSetupConfig: readConfig, readConfig,
+      stopForSetup: async () => ({}), startIfConfigured: async () => {
+        if (readConfig().releaseVersion !== "1.0.0") throw new Error("synthetic updated runtime failure");
+        return { status: "ready" };
+      } },
+  });
+  host.run = async (_name, args) => {
+    if (!args.includes("--preflight-only")) {
+      fs.writeFileSync(configPath, JSON.stringify({ ...config, releaseVersion: "2.0.0" }));
+      fs.writeFileSync(catalogPath, "new catalog\n");
+      fs.writeFileSync(journalPath, "new journal\n");
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  try {
+    await assert.rejects(host.setFreshConversationPerTurn(true), /synthetic updated runtime failure/);
+    assert.deepEqual(readConfig(), config);
+    assert.equal(fs.readFileSync(catalogPath, "utf8"), "old catalog\n");
+    assert.equal(fs.readFileSync(journalPath, "utf8"), "old journal\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("core setup refuses an implicit Automatic fallback for a new Zero Risk installation", async () => {

@@ -16,6 +16,7 @@ export interface LauncherState {
   keepRunningOnClose: boolean;
   showBrowserDuringTurns: boolean;
   autoApproveToolCalls: boolean;
+  mixedProvider: boolean;
   browserInteractionMode: BrowserInteractionMode;
   experimentalBiggerContext: boolean;
   biggerContextAvailable?: boolean;
@@ -29,6 +30,7 @@ export interface LauncherState {
   browserSmokeVersion?: string | null;
   coreSetupComplete?: boolean;
   codexCatalogVerified?: boolean;
+  codexLocalCatalogReady?: boolean;
   mcpSetupComplete?: boolean;
   mcpRuntimeInstalled?: boolean;
   codexRestartRequired?: boolean;
@@ -186,7 +188,7 @@ export interface LauncherApi {
     targetMode: BrowserInteractionMode;
   }>;
   setPreference(
-    key: "keepRunningOnClose" | "showBrowserDuringTurns",
+    key: "keepRunningOnClose" | "showBrowserDuringTurns" | "mixedProvider",
     value: boolean,
   ): Promise<LauncherState>;
   setSidebarState(state: { open: boolean; width: number }): Promise<LauncherState>;

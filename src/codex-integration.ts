@@ -31,6 +31,13 @@ import type {
 } from "./codex-integration-shared";
 import { assertJournalTargetsConfig, readJournal } from "./codex-integration-journal";
 import {
+  activateCustomCodexIntegration, deactivateCustomCodexIntegration,
+  getCustomCodexJournalPath, inspectCustomCodexIntegration, installCustomCodexIntegration,
+  getCustomCodexCatalogPath,
+  preflightCustomCodexIntegration, uninstallCustomCodexIntegration,
+  type CustomCodexIntegrationJournal,
+} from "./custom-codex-integration";
+import {
   findTopLevelAssignment,
   installCompatibilityV1Features,
   splitLines,
@@ -119,6 +126,11 @@ export type {
 export function readCodexSubagentProtocol(
   fallback: AppConfig["subagentProtocol"] = "compatibility-v1",
 ): AppConfig["subagentProtocol"] {
+  if (existsSync(getCustomCodexJournalPath())) {
+    const status = inspectCustomCodexIntegration();
+    if (status.errors.length) throw new Error(status.errors.join("; "));
+    return status.journal?.installed.subagent_protocol ?? fallback;
+  }
   const journal = readJournal();
   return journal?.version === 8 || journal?.version === 9 || journal?.version === 10
     ? journal.installed.subagent_protocol
@@ -128,7 +140,7 @@ export function readCodexSubagentProtocol(
 export function setCodexSubagentProtocol(
   config: AppConfig,
   protocol: AppConfig["subagentProtocol"],
-): CodexIntegrationJournal {
+): CodexIntegrationJournal | CustomCodexIntegrationJournal {
   const status = inspectCodexIntegration();
   if (!status.installed) throw new Error("Codex integration is not installed; run setup first");
   if (!status.active) {
@@ -144,6 +156,7 @@ export function setCodexSubagentProtocol(
     getCodexModelsCachePath(),
     getCodexJournalPath(),
     getCodexJournalRecoveryPath(),
+    ...(config.customProvider ? [getCustomCodexJournalPath(), getCustomCodexCatalogPath()] : []),
   ].map(path => snapshotFile(path, { followSymlink: path === getCodexConfigPath() }));
   try {
     const journal = installCodexIntegration(nextConfig);
@@ -171,6 +184,10 @@ export function preflightCodexIntegration(
   config: AppConfig,
   options: InstallCodexIntegrationOptions = {},
 ): void {
+  if (config.customProvider) return preflightCustomCodexIntegration(config, options);
+  if (existsSync(getCustomCodexJournalPath())) {
+    throw new Error("Remove the mixed custom/Web integration before installing the official provider mode");
+  }
   const configPath = getCodexConfigPath();
   const configSnapshot = snapshotFile(configPath, { followSymlink: true });
   const configExists = configSnapshot.exists;
@@ -233,7 +250,11 @@ export function preflightCodexIntegration(
 export function installCodexIntegration(
   config: AppConfig,
   options: InstallCodexIntegrationOptions = {},
-): CodexIntegrationJournal {
+): CodexIntegrationJournal | CustomCodexIntegrationJournal {
+  if (config.customProvider) return installCustomCodexIntegration(config, options);
+  if (existsSync(getCustomCodexJournalPath())) {
+    throw new Error("Remove the mixed custom/Web integration before installing the official provider mode");
+  }
   const configPath = getCodexConfigPath();
   mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
   const configExists = existsSync(configPath);
@@ -352,6 +373,7 @@ export function installCodexIntegration(
 }
 
 export function deactivateCodexIntegration(options: { forRuntimeRecovery?: boolean } = {}): SetCodexIntegrationActiveResult {
+  if (existsSync(getCustomCodexJournalPath())) return deactivateCustomCodexIntegration(options);
   const existing = readJournal();
   if (!existing) return { changed: false, active: false };
   if (existing.version === 2) {
@@ -388,6 +410,7 @@ export function deactivateCodexIntegration(options: { forRuntimeRecovery?: boole
 }
 
 export function activateCodexIntegration(options: { recoveryOnly?: boolean } = {}): SetCodexIntegrationActiveResult {
+  if (existsSync(getCustomCodexJournalPath())) return activateCustomCodexIntegration(options);
   const existing = readJournal();
   if (!existing) throw new Error("Codex integration is not installed");
   if (existing.version === 2) {
@@ -456,6 +479,7 @@ export function activateCodexIntegration(options: { recoveryOnly?: boolean } = {
 }
 
 export function uninstallCodexIntegration(): UninstallCodexIntegrationResult {
+  if (existsSync(getCustomCodexJournalPath())) return uninstallCustomCodexIntegration();
   const journal = readJournal();
   if (!journal) return { changed: false };
   if (!existsSync(journal.configPath)) throw new Error(`Codex config is missing: ${journal.configPath}`);
@@ -506,9 +530,10 @@ export function inspectCodexIntegration(): {
   active: boolean;
   configPath: string;
   routeUrl?: string;
-  journal?: AnyCodexIntegrationJournal;
+  journal?: AnyCodexIntegrationJournal | CustomCodexIntegrationJournal;
   errors: string[];
 } {
+  if (existsSync(getCustomCodexJournalPath())) return inspectCustomCodexIntegration();
   const journal = readJournal();
   const errors: string[] = [];
   if (journal) {

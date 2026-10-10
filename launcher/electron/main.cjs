@@ -32,6 +32,7 @@ const {
   registerLoggedIpc,
 } = require("./logging.cjs");
 const { RuntimeHost } = require("./runtime.cjs");
+const { verifyMixedProviderCatalog } = require("./mixed-provider.cjs");
 const { ensurePackagedRuntime, waitForPackagedRuntimeSource } = require("./runtime-install.cjs");
 const { RuntimeSupervisor } = require("./runtime-supervisor.cjs");
 const { DEVELOPMENT_PROFILE, resolveLauncherProfile } = require("./profile.cjs");
@@ -151,6 +152,31 @@ function startCatalogVerificationMonitor({ logger, stateStore }) {
     catalogVerificationInFlight = true;
     try {
       const config = runtimeSupervisor.readConfig();
+      if (config?.customProvider) {
+        let counts;
+        try {
+          counts = verifyMixedProviderCatalog(config);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message !== reportedFailure) {
+            reportedFailure = message;
+            const state = stateStore.update({ codexLocalCatalogReady: false });
+            send("launcher:state-changed", state);
+            publishOperation({ name: "catalog-verification", status: "failed", message });
+          }
+          return;
+        }
+        const state = stateStore.update({ mixedProvider: true, codexLocalCatalogReady: true });
+        logger.info("codex.local_model_catalog_ready", counts);
+        send("launcher:state-changed", state);
+        if (lastOperation?.name === "catalog-verification" && lastOperation.status === "failed") {
+          publishOperation({ name: "catalog-verification", status: "completed", message: "Local model catalog validated; restart Codex to load it. Browser and tool execution still require runtime verification." });
+        }
+        // API-key Codex can load model_catalog_json without calling /models.
+        // Preserve the restart notice and never label this as an observed load.
+        stopCatalogVerificationMonitor();
+        return;
+      }
       const health = await runtimeSupervisor.proxyHealthPayload(config);
       if (!Number.isInteger(health?.successful_model_catalog_requests)
         || health.successful_model_catalog_requests < 1) {
@@ -205,6 +231,7 @@ async function restoreCodexRouteAfterRuntimeFailure({ logger, stateStore }) {
     if (!route.installed || route.active) return { restored: false };
     const state = stateStore.update({
       codexCatalogVerified: false,
+      codexLocalCatalogReady: false,
       codexRestartRequired: true,
     });
     send("launcher:state-changed", state);
@@ -524,11 +551,13 @@ function syncBrowserPreferences(stateStore, config) {
   const enabled = config?.experimentalFreshConversationPerTurn === true;
   const autoApproveToolCalls = config?.autoApproveToolCalls === true;
   const current = stateStore.read();
+  const mixedProvider = config ? Boolean(config.customProvider) : current.mixedProvider === true;
   if (runtimeHost?.currentOperation()) return current;
   const retentionChanged = current.experimentalFreshConversationPerTurn !== enabled || current.useSavedChats !== useSavedChats
     || current.experimentalBiggerContext !== biggerContextEnabled;
   if (!retentionChanged && current.autoApproveToolCalls === autoApproveToolCalls
-    && current.biggerContextAvailable === biggerContextAvailable) return current;
+    && current.biggerContextAvailable === biggerContextAvailable
+    && (current.mixedProvider === true) === mixedProvider) return current;
   // Runtime restarts leave browser views alive. Retire completed chats when their
   // persistence policy changes, including changes made by the CLI.
   const retainedKeys = new Set((retentionChanged ? [...browserHost.turnTabs.values()] : [])
@@ -537,7 +566,7 @@ function syncBrowserPreferences(stateStore, config) {
     .map(tab => tab.conversationKey));
   for (const key of retainedKeys) releaseRetainedConversation(browserHost, key);
   const state = stateStore.update({ experimentalFreshConversationPerTurn: enabled, useSavedChats, autoApproveToolCalls, biggerContextAvailable,
-    experimentalBiggerContext: biggerContextEnabled });
+    experimentalBiggerContext: biggerContextEnabled, mixedProvider });
   send("launcher:state-changed", state);
   return state;
 }
@@ -788,6 +817,7 @@ function registerIpc({ logger, stateStore }) {
     const state = stateStore.update({
       coreSetupComplete: false,
       codexCatalogVerified: false,
+      codexLocalCatalogReady: false,
       mcpSetupComplete: false,
       mcpRuntimeInstalled: false,
       mcpGuideStep: 0,
@@ -830,6 +860,7 @@ function registerIpc({ logger, stateStore }) {
     stateStore.update({
       coreSetupComplete: true,
       codexCatalogVerified: IS_DEV_PROFILE ? true : false,
+      codexLocalCatalogReady: false,
       codexRestartRequired: IS_DEV_PROFILE ? false : true,
       biggerContextAvailable: typeof runtimeHost.runtimeConfigSnapshot().config?.solAvailable === "boolean",
       zeroRiskProEnabled: runtimeHost.runtimeConfigSnapshot().config?.zeroRiskProEnabled === true,
@@ -883,6 +914,7 @@ function registerIpc({ logger, stateStore }) {
       autoApproveToolCalls: runtimeHost.runtimeConfigSnapshot().config?.autoApproveToolCalls === true,
       coreSetupComplete: true,
       codexCatalogVerified: IS_DEV_PROFILE,
+      codexLocalCatalogReady: false,
       mcpRuntimeInstalled: true,
       mcpSetupComplete: false,
       mcpGuideStep: 2,
@@ -927,6 +959,7 @@ function registerIpc({ logger, stateStore }) {
     const state = stateStore.update({
       experimentalBiggerContext: result.enabled,
       codexCatalogVerified: IS_DEV_PROFILE ? true : false,
+      codexLocalCatalogReady: false,
       codexRestartRequired: IS_DEV_PROFILE ? false : true,
     });
     send("launcher:state-changed", state);
@@ -976,6 +1009,7 @@ function registerIpc({ logger, stateStore }) {
     const state = stateStore.update({
       zeroRiskProEnabled: result.enabled,
       codexCatalogVerified: IS_DEV_PROFILE,
+      codexLocalCatalogReady: false,
       codexRestartRequired: !IS_DEV_PROFILE,
     });
     send("launcher:state-changed", state);
@@ -1012,6 +1046,7 @@ function registerIpc({ logger, stateStore }) {
       ...(mode === "manual" ? { experimentalBiggerContext: false, experimentalSkillAttachments: false } : {}),
       ...(result.configured ? {
         codexCatalogVerified: IS_DEV_PROFILE,
+        codexLocalCatalogReady: false,
         codexRestartRequired: !IS_DEV_PROFILE,
       } : {}),
     });
@@ -1022,6 +1057,15 @@ function registerIpc({ logger, stateStore }) {
   });
   handle("launcher:set-preference", (_event, key, value) => {
     const ordinary = key === "keepRunningOnClose" || key === "showBrowserDuringTurns";
+    if (key === "mixedProvider") {
+      if (IS_DEV_PROFILE) throw new Error("Mixed provider mode is unavailable in the DEV profile");
+      if (runtimeHost.currentOperation()) throw new Error("Finish the current operation before changing provider mode");
+      if (runtimeHost.runtimeConfigSnapshot().configured) {
+        throw new Error("Remove the Codex integration before changing provider mode");
+      }
+      if (typeof value !== "boolean") throw new Error("Mixed provider preference must be a boolean");
+      return stateStore.update({ mixedProvider: value });
+    }
     if (!ordinary) throw new Error("Unknown preference");
     return stateStore.update({ [key]: value === true });
   });
@@ -1214,6 +1258,7 @@ async function start() {
     publishOperation,
     supervisor: runtimeSupervisor,
     getBrowserInteractionMode: () => stateStore.read().browserInteractionMode,
+    getMixedProvider: () => stateStore.read().mixedProvider,
   });
   const configuredInteractionMode = runtimeHost.runtimeConfigSnapshot().config?.browserInteractionMode;
   if ((configuredInteractionMode === "automatic" || configuredInteractionMode === "manual")
@@ -1347,6 +1392,7 @@ async function start() {
       const state = stateStore.update({
         coreSetupComplete: true,
         codexCatalogVerified: false,
+        codexLocalCatalogReady: false,
         codexRestartRequired: true,
         experimentalBiggerContext: runtimeHost.runtimeConfigSnapshot().config?.experimentalBiggerContext === true,
         experimentalSkillAttachments: runtimeHost.runtimeConfigSnapshot().config?.experimentalSkillAttachments === true,
@@ -1410,6 +1456,7 @@ async function start() {
         zeroRiskProEnabled: config.zeroRiskProEnabled === true,
         ...(runtime.bridgeRouteChanged ? {
           codexCatalogVerified: false,
+          codexLocalCatalogReady: false,
           codexRestartRequired: true,
         } : {}),
         ...(config.mode === "browser-only" ? {
@@ -1431,6 +1478,7 @@ async function start() {
         const state = stateStore.update({
           coreSetupComplete: false,
           codexCatalogVerified: false,
+          codexLocalCatalogReady: false,
           mcpRuntimeInstalled: false,
           mcpSetupComplete: false,
           mcpGuideStep: 0,
@@ -1447,7 +1495,7 @@ async function start() {
       return;
     }
     const routeRecovery = await restoreCodexRouteAfterRuntimeFailure({ logger, stateStore });
-    const state = stateStore.update({ coreSetupComplete: false, codexCatalogVerified: false });
+    const state = stateStore.update({ coreSetupComplete: false, codexCatalogVerified: false, codexLocalCatalogReady: false });
     send("launcher:state-changed", state);
     if (runtime.status === "external" || runtime.status === "needs-setup") {
       const detail = runtime.detail || (
@@ -1474,7 +1522,7 @@ async function start() {
         ? `${primary}; the previous Codex route was restored, restart Codex once`
         : primary;
     logger.error("runtime.startup_failed", { message });
-    const state = stateStore.update({ coreSetupComplete: false, codexCatalogVerified: false });
+    const state = stateStore.update({ coreSetupComplete: false, codexCatalogVerified: false, codexLocalCatalogReady: false });
     send("launcher:state-changed", state);
     publishOperation({ name: "runtime-start", status: "failed", message });
   }).finally(finishRuntimeStartup);

@@ -1,3 +1,5 @@
+> この Fork は API キーと既存のカスタムプロバイダーを保持する混合ルーティングを追加します。[混合モードガイド](docs/mixed-provider.zh-CN.md)を参照してください。実装は `codex/mixed-custom-web` ブランチにあり、下記の上流 v6.1.7 配布には含まれません。
+
 <p align="center">
   <img src="assets/readme/hero.svg" width="960" alt="Web モデルに切り替えても、Codex はそのまま。ChatGPT のプラン。いつものワークフロー。モデルの力を最大限に。">
 </p>

@@ -290,6 +290,7 @@ describe("reversible native Codex route integration", () => {
 
     const journal = installCodexIntegration(compatibilityV1Config("full"));
     const installed = readFileSync(configPath, "utf8");
+    if (journal.version !== 10) throw new Error("Expected the native integration journal");
     expect(journal.previousMultiAgentV2).toMatchObject({
       inlineTable: true,
       value: "true",
@@ -352,6 +353,7 @@ describe("reversible native Codex route integration", () => {
 
     expect(() => preflightCodexIntegration(config, { replaceExistingRoute: true })).not.toThrow();
     const journal = installCodexIntegration(config, { replaceExistingRoute: true });
+    if (journal.version !== 10) throw new Error("Expected the native integration journal");
     expect(journal.previousMultiAgentV2).toMatchObject({
       inlineTable: true,
       value: "true",
@@ -590,6 +592,7 @@ describe("reversible native Codex route integration", () => {
     writeFileSync(configPath, original);
 
     const journal = installCodexIntegration(nativeConfig("browser-only"));
+    if (journal.version !== 10) throw new Error("Expected the native integration journal");
     expect(journal.previousRealtimeWebrtcCallBaseUrl).toMatchObject({
       present: true,
       rawLine: priorVoiceLine,
@@ -1054,6 +1057,7 @@ describe("reversible native Codex route integration", () => {
       { replaceExistingRoute: true },
     );
     expect(upgraded.version).toBe(10);
+    if (upgraded.version !== 10) throw new Error("Expected the native integration journal");
     expect(upgraded.previousRealtimeWebrtcCallBaseUrl.rawLine).toBe(customVoiceLine);
     uninstallCodexIntegration();
     expect(readFileSync(configPath, "utf8")).toBe(original);

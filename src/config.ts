@@ -9,6 +9,7 @@ import {
 } from "./chatgpt-web-models";
 import type { CodexProviderConfig } from "./types";
 import { VERSION } from "./version";
+import { validateCustomProviderConfig, type CustomProviderConfig } from "./custom-provider";
 
 export type RuntimeMode = "browser-only" | "full";
 export type BrowserHostMode = "managed-chrome" | "launcher";
@@ -132,6 +133,8 @@ export interface AppConfig {
   tunnel?: TunnelConfig;
   automaticTunnel?: TunnelConfig;
   manualTunnel?: TunnelConfig;
+  /** Opt-in local routing; authentication remains owned by Codex's selected custom provider. */
+  customProvider?: CustomProviderConfig;
 }
 
 export function tunnelConfigForInteractionMode(
@@ -409,6 +412,7 @@ export function loadConfigForSetup(): AppConfig {
 function parseConfig(value: unknown, path: string): AppConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid configuration object in ${path}`);
   const parsed = value as Partial<AppConfig>;
+  if (parsed.customProvider !== undefined) validateCustomProviderConfig(parsed.customProvider);
   if (parsed.version !== 3) throw new Error(`Unsupported configuration version in ${path}; rerun setup to migrate it`);
   if (parsed.purpose !== undefined && parsed.purpose !== "dev-harness") {
     throw new Error(`Invalid configuration purpose in ${path}`);

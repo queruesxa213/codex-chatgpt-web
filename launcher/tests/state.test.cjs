@@ -25,6 +25,7 @@ test("launcher state persists onboarding, language, and autostart atomically", (
       keepRunningOnClose: true,
       showBrowserDuringTurns: true,
       autoApproveToolCalls: false,
+      mixedProvider: false,
       browserInteractionMode: "automatic",
       experimentalBiggerContext: false,
       experimentalSkillAttachments: false,
@@ -55,6 +56,7 @@ test("launcher state persists onboarding, language, and autostart atomically", (
       keepRunningOnClose: false,
       showBrowserDuringTurns: true,
       autoApproveToolCalls: false,
+      mixedProvider: false,
       browserInteractionMode: "automatic",
       experimentalBiggerContext: false,
       experimentalSkillAttachments: false,
@@ -83,6 +85,21 @@ test("sidebar state accepts only bounded native shell dimensions", () => {
   assert.throws(() => validateSidebarState({ open: "yes", width: 300 }), /invalid/);
   assert.throws(() => validateSidebarState({ open: true, width: 100 }), /between 240 and 420/);
   assert.throws(() => validateSidebarState({ open: true, width: 900 }), /between 240 and 420/);
+});
+
+test("mixed provider opt-in survives restart and rejects corrupt persisted values", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-mixed-state-"));
+  const file = path.join(root, "state.json");
+  try {
+    const store = createStateStore(file);
+    assert.equal(store.read().mixedProvider, false);
+    store.update({ mixedProvider: true });
+    assert.equal(createStateStore(file).read().mixedProvider, true);
+    fs.writeFileSync(file, JSON.stringify({ version: 1, mixedProvider: "true" }));
+    assert.equal(createStateStore(file).read().mixedProvider, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("every supported launcher language survives a state update and reload", () => {
@@ -136,6 +153,7 @@ test("persisted sidebar corruption is repaired without changing the rest of laun
       keepRunningOnClose: true,
       showBrowserDuringTurns: true,
       autoApproveToolCalls: false,
+      mixedProvider: false,
       browserInteractionMode: "automatic",
       experimentalBiggerContext: false,
       experimentalSkillAttachments: false,
